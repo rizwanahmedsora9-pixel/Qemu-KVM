@@ -20,22 +20,30 @@ concurrency:
 jobs:
   update-inventory:
     runs-on: ubuntu-latest
+    # Skip PR runs whose branch is already gone (e.g. auto-merge deleted it
+    # while this run was still queued) — nothing to commit back to.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo != null
     steps:
       - name: Checkout
+        id: checkout
         uses: actions/checkout@v4
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         with:
           # On PRs, check out the head branch so we can commit the refreshed
-          # inventory back onto the PR itself.
+          # inventory back onto the PR itself. If auto-merge already deleted
+          # the branch, this fails soft and later steps are skipped.
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Regenerate APP_INVENTORY.md
+        if: steps.checkout.outcome == 'success'
         run: |
           chmod +x scripts/update_app_docs.sh
           ./scripts/update_app_docs.sh
 
       - name: Commit updated docs
+        if: steps.checkout.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
