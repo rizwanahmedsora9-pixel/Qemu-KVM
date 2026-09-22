@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Router Firmware Emulator</string>
+    <string name="qemu_channel_name">QEMU Emulator</string>
+    <string name="qemu_notification_title">Router firmware running</string>
+</resources>

@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.RouterEmu" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
