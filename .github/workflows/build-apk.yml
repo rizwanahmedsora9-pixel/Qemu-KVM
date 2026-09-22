@@ -1,0 +1,190 @@
+# Builds the RouterEmu APK on every PR/push, gathers toolchain + build info,
+# and — when a PR is auto-merged into main — regenerates the repo "info data"
+# (APP_INVENTORY.md), rebuilds, and publishes the APKs + info files as a
+# GitHub Release asset bundle.
+name: Build APK
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, auto_merge_enabled]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # For auto-merge / main pushes, full history helps generate info data.
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Make helper scripts executable
+        run: chmod +x scripts/*.sh
+
+      - name: Regenerate app info data (inventory)
+        run: ./scripts/update_app_docs.sh
+
+      - name: Collect toolchain & build info
+        id: info
+        run: |
+          mkdir -p build-info
+          {
+            echo "# RouterEmu build info"
+            echo
+            echo "## Run"
+            echo "- date_utc: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo "- event: ${{ github.event_name }}"
+            echo "- ref: ${GITHUB_REF}"
+            echo "- commit: ${GITHUB_SHA}"
+            echo "- short_commit: $(git rev-parse --short HEAD)"
+            echo "- actor: ${{ github.actor }}"
+            echo "- run_id: ${{ github.run_id }}"
+            echo "- run_number: ${{ github.run_number }}"
+            echo "- repo: ${{ github.repository }}"
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "- pr_number: ${PR_NUMBER}"
+              echo "- pr_title: ${PR_TITLE}"
+              echo "- pr_auto_merge: ${PR_AUTO_MERGE}"
+            fi
+            echo
+            echo "## Toolchain"
+            echo '```'
+            echo "java: $(java -version 2>&1 | head -1)"
+            echo "javac: $(javac -version 2>&1)"
+            echo "gradle: $(gradle -version 2>/dev/null | grep -E '^Gradle' | head -1)"
+            echo "android-sdk: ${ANDROID_HOME:-not-set}"
+            echo "sdkmanager: $(ls \"${ANDROID_HOME}/cmdline-tools\" 2>/dev/null | tr '\n' ' ')"
+            echo "build-tools: $(ls \"${ANDROID_HOME}/build-tools\" 2>/dev/null | tr '\n' ' ')"
+            echo "os: $(uname -a)"
+            echo '```'
+            echo
+            echo "## App versions"
+            # (PR_* env vars are only set for pull_request events)
+            echo "- applicationId: com.example.routeremu"
+            echo "- versionName: 1.0"
+            echo "- versionCode: 1"
+            echo "- compileSdk/targetSdk: 34, minSdk: 26"
+            echo "- AGP: 8.5.2, Kotlin: 1.9.24, Compose BOM: 2024.06.00"
+          } | tee build-info/build-info.md
+          # Machine-readable copy for tooling that consumes CI info data.
+          {
+            echo "event=${{ github.event_name }}"
+            echo "commit=${GITHUB_SHA}"
+            echo "short_commit=$(git rev-parse --short HEAD)"
+            echo "ref=${GITHUB_REF}"
+            echo "built_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "gradle=8.7"
+            echo "agp=8.5.2"
+            echo "kotlin=1.9.24"
+            echo "java=17"
+          } > build-info/build-info.env
+          # PR / merge metadata (info data captured at auto-merge time).
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            jq -n \
+              --argjson pr "${PR_NUMBER}" \
+              --arg title "$PR_TITLE" \
+              --arg state "$PR_STATE" \
+              --argjson auto_merge "$PR_AUTO_MERGE" \
+              '{pr: $pr, title: $title, state: $state, auto_merge: $auto_merge}' \
+              > build-info/pr-info.json
+          fi
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+          PR_TITLE: ${{ github.event.pull_request.title || '' }}
+          PR_STATE: ${{ github.event.pull_request.state || '' }}
+          PR_AUTO_MERGE: ${{ github.event.pull_request.auto_merge != null }}
+
+      - name: Build debug & release APKs
+        run: |
+          gradle -p RouterEmu --no-daemon clean assembleDebug assembleRelease
+
+      - name: Collect APKs and generate checksums
+        run: |
+          mkdir -p artifacts
+          cp RouterEmu/app/build/outputs/apk/debug/app-debug.apk \
+             artifacts/RouterEmu-debug.apk
+          # Release is signed with the debug keystore so CI APKs are installable.
+          rel="$(find RouterEmu/app/build/outputs/apk/release -name '*.apk' | head -1)"
+          cp "$rel" artifacts/RouterEmu-release.apk
+          cp APP_INVENTORY.md artifacts/APP_INVENTORY.md
+          cp build-info/build-info.md artifacts/build-info.md
+          cp build-info/build-info.env artifacts/build-info.env
+          [ -f build-info/pr-info.json ] && cp build-info/pr-info.json artifacts/pr-info.json
+          (cd artifacts && sha256sum *.apk > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          ls -la artifacts/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterEmu-APK-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
+      # ---- Auto-merge / main: refresh info data on main + publish release ----
+      - name: Commit refreshed info data to main (post-merge)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP_INVENTORY.md
+          if git diff --cached --quiet; then
+            echo "Info data already up to date on main."
+          else
+            git commit -m "docs: refresh app info data after merge [skip ci]"
+            git push
+          fi
+
+      - name: Publish release bundle (main auto-merge)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+          HEAD_COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          tag="latest-main"
+          head_line="$(printf '%s\n' "$HEAD_COMMIT_MSG" | head -1)"
+          notes="Auto-built on merge to \`main\`.
+
+          **Merge:** ${head_line}
+
+          **Commit:** \`${GITHUB_SHA}\`
+
+          Attachments: debug + release APKs, SHA256SUMS.txt, APP_INVENTORY.md, build-info.md (toolchain + info data)."
+
+          if gh release view "$tag" --repo "$GITHUB_REPO" >/dev/null 2>&1; then
+            gh release upload "$tag" artifacts/* --repo "$GITHUB_REPO" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPO" --notes "$notes" --title "Latest main build (${GITHUB_SHA::7})"
+          else
+            gh release create "$tag" artifacts/* \
+              --repo "$GITHUB_REPO" \
+              --title "Latest main build (${GITHUB_SHA::7})" \
+              --notes "$notes" \
+              --latest
+          fi

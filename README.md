@@ -58,20 +58,39 @@ firmadyne / FirmAE, packaged as a self-contained mobile app.
 3. Open `RouterEmu/` in Android Studio (Koala/Ladybug+), let Gradle sync, build.
    `minSdk` 26, `targetSdk`/`compileSdk` 34, Kotlin 1.9.24, AGP 8.5.2, Compose BOM 2024.06.00.
 
-## Automatic updates on new PRs
+## CI: APK builds, info data, auto-merge publishing
 
-A GitHub Actions workflow
-([`.github/workflows/update-app-docs.yml`](.github/workflows/update-app-docs.yml))
-runs on **every new pull request** (opened, synchronize, reopened) and on
-pushes to `main`. It:
+### [`build-apk.yml`](.github/workflows/build-apk.yml) — Build APK
 
-- regenerates [`APP_INVENTORY.md`](APP_INVENTORY.md) from the live source tree
-  (file list + line counts, kept in sync with the app automatically), and
-- commits the refreshed inventory back to the PR branch when it changed, so the
-  docs always reflect the latest PR contents.
+Runs on every PR (including `auto_merge_enabled`), pushes to `main`, and the
+merge queue. It:
 
-You can also regenerate it locally:
+1. **Builds the APK** — debug + release (`RouterEmu-debug.apk`,
+   `RouterEmu-release.apk`, release signed with the debug keystore so CI
+   artifacts are installable).
+2. **Gathers toolchain & info data** — `build-info.md` / `build-info.env`
+   (Java, Gradle, Android SDK, AGP/Kotlin/Compose versions, commit, run
+   metadata) and `pr-info.json` on PRs (number, title, auto-merge flag).
+3. **Uploads artifacts** — the full bundle including `APP_INVENTORY.md`,
+   `SHA256SUMS.txt`, and the info files (kept 30 days).
+
+**On auto-merge to `main`** the same workflow additionally:
+
+- regenerates and **commits refreshed info data** (`APP_INVENTORY.md`) back to
+  `main` (`docs: refresh app info data after merge [skip ci]`), and
+- **publishes/updates the `latest-main` GitHub Release** with the APKs,
+  checksums, inventory, and build-info (release assets are `--clobber`-updated
+  on every merge).
+
+### [`update-app-docs.yml`](.github/workflows/update-app-docs.yml) — docs on every PR
+
+Runs on every new PR (opened / synchronize / reopened) and regenerates
+[`APP_INVENTORY.md`](APP_INVENTORY.md) from the live source tree, committing it
+back to the PR branch when changed.
+
+### Local equivalents
 
 ```bash
-./scripts/update_app_docs.sh
+./scripts/update_app_docs.sh   # regenerate APP_INVENTORY.md
+gradle -p RouterEmu assembleDebug assembleRelease   # build APKs
 ```
