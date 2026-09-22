@@ -1,0 +1,48 @@
+name: Update app docs on new PR
+
+# Keeps APP_INVENTORY.md in sync with the app source on every new pull
+# request (opened / synchronize / reopened) and on pushes to main.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-app-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update-inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # On PRs, check out the head branch so we can commit the refreshed
+          # inventory back onto the PR itself.
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Regenerate APP_INVENTORY.md
+        run: |
+          chmod +x scripts/update_app_docs.sh
+          ./scripts/update_app_docs.sh
+
+      - name: Commit updated docs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add APP_INVENTORY.md
+          if git diff --cached --quiet; then
+            echo "Inventory already up to date — nothing to commit."
+          else
+            git commit -m "docs: auto-update app inventory [skip ci]"
+            git push
+          fi

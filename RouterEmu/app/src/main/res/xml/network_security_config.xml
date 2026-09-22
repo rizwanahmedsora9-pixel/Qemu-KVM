@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      QEMU's hostfwd exposes the emulated router's web UI on
+      http://localhost:8080 (plain HTTP, since that's what the firmware
+      itself serves). WebView on modern Android blocks cleartext by default,
+      so we explicitly allow it for loopback only — nothing else gets an
+      exemption.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
