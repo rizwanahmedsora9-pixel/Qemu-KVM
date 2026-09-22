@@ -125,9 +125,31 @@ jobs:
           PR_STATE: ${{ github.event.pull_request.state || '' }}
           PR_AUTO_MERGE: ${{ github.event.pull_request.auto_merge != null }}
 
+      - name: Accept Android SDK licenses & install platform
+        run: |
+          # AGP needs platform 34 + build-tools; accept licenses so auto-download works.
+          if [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" \
+              "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
+          fi
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          ls "${ANDROID_HOME}/platforms" 2>/dev/null || true
+
       - name: Build debug & release APKs
         run: |
-          gradle -p RouterEmu --no-daemon clean assembleDebug assembleRelease
+          set -o pipefail
+          gradle -p RouterEmu --no-daemon --stacktrace assembleDebug assembleRelease 2>&1 \
+            | tee gradle-build.log
+
+      - name: Upload Gradle log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log-${{ github.sha }}
+          path: gradle-build.log
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Collect APKs and generate checksums
         run: |
