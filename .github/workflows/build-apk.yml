@@ -137,10 +137,22 @@ jobs:
           ls "${ANDROID_HOME}/platforms" 2>/dev/null || true
 
       - name: Build debug & release APKs
+        id: gradle_build
         run: |
           set -o pipefail
-          gradle -p RouterEmu --no-daemon --stacktrace assembleDebug assembleRelease 2>&1 \
-            | tee gradle-build.log
+          if gradle -p RouterEmu --no-daemon --stacktrace assembleDebug assembleRelease 2>&1 \
+              | tee gradle-build.log; then
+            echo "build_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_ok=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Gradle build failed — log tail"
+              echo '```'
+              tail -n 120 gradle-build.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Upload Gradle log on failure
         if: failure()
@@ -150,6 +162,21 @@ jobs:
           path: gradle-build.log
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Post failure log on PR
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### ❌ Build APK failed — Gradle log tail"
+            echo '```'
+            tail -n 150 gradle-build.log 2>/dev/null || echo "(no gradle-build.log)"
+            echo '```'
+          } > /tmp/fail-comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body-file /tmp/fail-comment.md || true
 
       - name: Collect APKs and generate checksums
         run: |
