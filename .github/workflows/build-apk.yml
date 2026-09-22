@@ -14,6 +14,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  checks: write
 
 concurrency:
   group: build-apk-${{ github.ref }}
@@ -31,13 +33,18 @@ jobs:
           fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          # v4 no longer requests the legacy 'tools' package (Google removed
+          # it; v3's default made sdkmanager hard-fail). AGP downloads the
+          # platform/build-tools this project needs during the Gradle build.
+          packages: platform-tools
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -120,9 +127,68 @@ jobs:
           PR_STATE: ${{ github.event.pull_request.state || '' }}
           PR_AUTO_MERGE: ${{ github.event.pull_request.auto_merge != null }}
 
-      - name: Build debug & release APKs
+      - name: Accept Android SDK licenses & install platform
         run: |
-          gradle -p RouterEmu --no-daemon clean assembleDebug assembleRelease
+          # AGP needs platform 34 + build-tools; accept licenses so auto-download works.
+          if [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+            yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" \
+              "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
+          fi
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          ls "${ANDROID_HOME}/platforms" 2>/dev/null || true
+
+      - name: Build debug & release APKs
+        id: gradle_build
+        run: |
+          set -o pipefail
+          echo "== environment =="
+          which gradle || echo "gradle not on PATH"
+          gradle --version || true
+          echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
+          echo "JAVA_HOME=${JAVA_HOME:-unset}"
+          echo "=================="
+          if gradle -p RouterEmu --no-daemon --stacktrace assembleDebug assembleRelease 2>&1 \
+              | tee gradle-build.log; then
+            echo "build_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_ok=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Gradle build failed — log tail"
+              echo '```'
+              tail -n 120 gradle-build.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            # Surface the error lines as annotations (readable via API).
+            tail -n 40 gradle-build.log | sed 's/%25/%/g' | while IFS= read -r line; do
+              echo "::error title=Gradle::${line}"
+            done
+            exit 1
+          fi
+
+      - name: Upload Gradle log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log-${{ github.sha }}
+          path: gradle-build.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Post failure log on PR
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### ❌ Build APK failed — Gradle log tail"
+            echo '```'
+            tail -n 150 gradle-build.log 2>/dev/null || echo "(no gradle-build.log)"
+            echo '```'
+          } > /tmp/fail-comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body-file /tmp/fail-comment.md || true
 
       - name: Collect APKs and generate checksums
         run: |
