@@ -14,6 +14,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  checks: write
 
 concurrency:
   group: build-apk-${{ github.ref }}
@@ -140,6 +142,12 @@ jobs:
         id: gradle_build
         run: |
           set -o pipefail
+          echo "== environment =="
+          which gradle || echo "gradle not on PATH"
+          gradle --version || true
+          echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
+          echo "JAVA_HOME=${JAVA_HOME:-unset}"
+          echo "=================="
           if gradle -p RouterEmu --no-daemon --stacktrace assembleDebug assembleRelease 2>&1 \
               | tee gradle-build.log; then
             echo "build_ok=true" >> "$GITHUB_OUTPUT"
@@ -151,6 +159,10 @@ jobs:
               tail -n 120 gradle-build.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
+            # Surface the error lines as annotations (readable via API).
+            tail -n 40 gradle-build.log | sed 's/%25/%/g' | while IFS= read -r line; do
+              echo "::error title=Gradle::${line}"
+            done
             exit 1
           fi
 
