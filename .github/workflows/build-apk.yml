@@ -214,8 +214,10 @@ jobs:
           retention-days: 30
 
       # ---- Auto-merge / main: refresh info data on main + publish release ----
+      # Also runs on workflow_dispatch (needed when a merge commit contains
+      # "[skip ci]" and GitHub skips the automatic push trigger).
       - name: Commit refreshed info data to main (post-merge)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -223,16 +225,16 @@ jobs:
           if git diff --cached --quiet; then
             echo "Info data already up to date on main."
           else
-            git commit -m "docs: refresh app info data after merge [skip ci]"
+            git commit -m "docs: refresh app info data after merge"
             git push
           fi
 
       - name: Publish release bundle (main auto-merge)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO: ${{ github.repository }}
-          HEAD_COMMIT_MSG: ${{ github.event.head_commit.message }}
+          HEAD_COMMIT_MSG: ${{ github.event.head_commit.message || 'Manual main build' }}
         run: |
           tag="latest-main"
           head_line="$(printf '%s\n' "$HEAD_COMMIT_MSG" | head -1)"
