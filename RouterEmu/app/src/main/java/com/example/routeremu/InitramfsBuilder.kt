@@ -20,8 +20,22 @@ import java.util.zip.GZIPOutputStream
  * our `/init` mounts the real root underneath at `/new_root`, copies the shim
  * in, configures networking, and `switch_root`s into the firmware with
  * `LD_PRELOAD` still exported. No root, no image mutation, no host tooling.
+ *
+ * ## Escaping rule for the templates below
+ *
+ * These are Kotlin **raw strings**, so every `$` in them starts Kotlin string
+ * interpolation. Every shell `$` must therefore be written `${'$'}`, or the
+ * compiler reports "Unresolved reference" for the shell variable. The only
+ * intentional Kotlin interpolations are the ones spelled as a plain `$name`
+ * referring to a Kotlin symbol, listed in [INTENTIONAL_INTERPOLATIONS].
+ *
+ * `tools/verify_initramfs.py` enforces this rule statically, because getting it
+ * wrong otherwise costs a CI round-trip to discover.
  */
 object InitramfsBuilder {
+
+    /** Kotlin symbols that legitimately interpolate inside the templates. */
+    val INTENTIONAL_INTERPOLATIONS = setOf("iters", "WATCHDOG_INTERVAL_SECONDS")
 
     private const val SLIRP_GUEST_IP = "10.0.2.15"
     private const val SLIRP_NETMASK = "255.255.255.0"
@@ -184,25 +198,26 @@ object InitramfsBuilder {
             |say 'starting network watchdog ($iters iterations)'
             |(
             |  i=0
-            |  while [ "$i" -lt $iters ]; do
+            |  while [ "${'$'}i" -lt $iters ]; do
             |    BB=""
             |    for c in /new_root/bin/routeremu-busybox /bin/routeremu-busybox /bin/busybox; do
-            |      if [ -x "$c" ]; then BB="$c"; break; fi
+            |      if [ -x "${'$'}c" ]; then BB="${'$'}c"; break; fi
             |    done
-            |    if [ -n "$BB" ]; then
-            |      "$BB" ifconfig lo up 2>/dev/null
-            |      "$BB" ifconfig eth0 %GUEST_IP% netmask %NETMASK% up 2>/dev/null
-            |      "$BB" ifconfig br0 %GUEST_IP% netmask %NETMASK% up 2>/dev/null
-            |      "$BB" sleep $WATCHDOG_INTERVAL_SECONDS
+            |    if [ -n "${'$'}BB" ]; then
+            |      "${'$'}BB" ifconfig lo up 2>/dev/null
+            |      "${'$'}BB" ifconfig eth0 %GUEST_IP% netmask %NETMASK% up 2>/dev/null
+            |      "${'$'}BB" ifconfig br0 %GUEST_IP% netmask %NETMASK% up 2>/dev/null
+            |      "${'$'}BB" sleep $WATCHDOG_INTERVAL_SECONDS
             |    else
             |      break
             |    fi
-            |    i=$((i+1))
+            |    i=${'$'}((i+1))
             |  done
             |) >/dev/null 2>&1 &
         """.trimMargin()
     }
 
+    // Every shell `$` below is written `${'$'}` — see the class doc.
     private val INIT_TEMPLATE = """
 #!/bin/busybox sh
 # RouterEmu initramfs /init - generated at runtime by InitramfsBuilder.kt.
@@ -230,28 +245,28 @@ say "cmdline: ${'$'}(cat /proc/cmdline)"
 # ---- mount the firmware rootfs ------------------------------------------
 CMD_ROOT=""
 for a in ${'$'}(cat /proc/cmdline); do
-  case "$a" in root=*) CMD_ROOT="${'$'}{a#root=}" ;; esac
+  case "${'$'}a" in root=*) CMD_ROOT="${'$'}{a#root=}" ;; esac
 done
 
 ROOTDEV=""
-for d in "$CMD_ROOT" %ROOT_CANDIDATES%; do
-  [ -z "$d" ] && continue
-  [ -e "$d" ] || continue
+for d in "${'$'}CMD_ROOT" %ROOT_CANDIDATES%; do
+  [ -z "${'$'}d" ] && continue
+  [ -e "${'$'}d" ] || continue
   for t in ext4 ext3 ext2; do
-    if mount -t "$t" -o rw "$d" /new_root 2>/dev/null; then
-      ROOTDEV="$d"
+    if mount -t "${'$'}t" -o rw "${'$'}d" /new_root 2>/dev/null; then
+      ROOTDEV="${'$'}d"
       break
     fi
   done
-  [ -n "$ROOTDEV" ] && break
+  [ -n "${'$'}ROOTDEV" ] && break
 done
 
-if [ -z "$ROOTDEV" ]; then
+if [ -z "${'$'}ROOTDEV" ]; then
   say 'FATAL: could not mount a firmware root filesystem'
   say 'the disk image must be a raw ext2/3/4 image, not a firmware .bin'
   exec /bin/busybox sh
 fi
-say "firmware root mounted from $ROOTDEV"
+say "firmware root mounted from ${'$'}ROOTDEV"
 
 %NVRAM_BLOCK%
 
@@ -259,8 +274,8 @@ say "firmware root mounted from $ROOTDEV"
 
 # ---- hand over ----------------------------------------------------------
 for m in /proc /sys /dev; do
-  mkdir -p "/new_root$m"
-  mount --move "$m" "/new_root$m" 2>/dev/null
+  mkdir -p "/new_root${'$'}m"
+  mount --move "${'$'}m" "/new_root${'$'}m" 2>/dev/null
 done
 
 # Leave a busybox inside the new root so the watchdog survives switch_root.
@@ -269,11 +284,11 @@ cp -f /bin/busybox /new_root/bin/routeremu-busybox 2>/dev/null && chmod 755 /new
 %WATCHDOG_BLOCK%
 
 INIT="%INIT_PATH%"
-[ -x "/new_root$INIT" ] || INIT=/sbin/init
-[ -x "/new_root$INIT" ] || INIT=/etc/preinit
-[ -x "/new_root$INIT" ] || INIT=/bin/init
-[ -x "/new_root$INIT" ] || INIT=/bin/sh
-say "switching root, init=$INIT"
-exec switch_root /new_root "$INIT"
+[ -x "/new_root${'$'}INIT" ] || INIT=/sbin/init
+[ -x "/new_root${'$'}INIT" ] || INIT=/etc/preinit
+[ -x "/new_root${'$'}INIT" ] || INIT=/bin/init
+[ -x "/new_root${'$'}INIT" ] || INIT=/bin/sh
+say "switching root, init=${'$'}INIT"
+exec switch_root /new_root "${'$'}INIT"
 """
 }

@@ -158,7 +158,7 @@ def extract_quoted_after(src, marker):
     i = src.index(marker)
     j = src.index('"""', i) + 3
     k = src.index('"""', j)
-    return trim_margin(src[j:k])
+    return kotlin_unescape(trim_margin(src[j:k]))
 
 
 def kotlin_unescape(s):
@@ -216,9 +216,45 @@ def test_init_script():
     print("      emitted script: %d lines, %d bytes" % (script.count("\n"), len(script)))
 
 
+def test_dollar_escaping():
+    """
+    Kotlin raw strings interpolate on `$`. Every shell `$` in these templates
+    must be written ${'$'} or the compiler fails with "Unresolved reference".
+    This is the exact class of bug that cost a CI round-trip, so check it here.
+    """
+    print("\n[3] `$` escaping in the raw-string templates")
+    src = read_kotlin("InitramfsBuilder.kt")
+
+    # Whitelist: the only Kotlin symbols that legitimately interpolate.
+    allowed = {"iters", "WATCHDOG_INTERVAL_SECONDS"}
+
+    raws = re.findall(r'"""(.*?)"""', src, re.S)
+    check(len(raws) >= 4, "found %d raw-string templates to inspect" % len(raws))
+
+    offenders = []
+    for body in raws:
+        # Drop escaped dollars first; whatever `$` remains is interpolation.
+        cleaned = body.replace("${'$'}", "")
+        for m in re.finditer(r"\$\{([^}]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", cleaned):
+            expr = m.group(1) if m.group(1) is not None else m.group(2)
+            if expr in allowed or expr.startswith("config.") or expr.startswith("busybox"):
+                continue
+            offenders.append(expr)
+
+    check(not offenders,
+          "no unescaped shell `$var` in templates (offenders: %s)"
+          % (sorted(set(offenders)) or "none"))
+
+    # And confirm the escaping is actually load-bearing: the template must
+    # contain escaped dollars, otherwise the check above passed vacuously.
+    check(src.count("${'$'}") >= 20,
+          "template uses ${'$'} escaping (%d occurrences)" % src.count("${'$'}"))
+
+
 if __name__ == "__main__":
     test_cpio()
     test_init_script()
+    test_dollar_escaping()
     print("\n" + ("ALL CHECKS PASSED" if not FAIL else "%d CHECK(S) FAILED" % len(FAIL)))
     for f in FAIL:
         print("  - " + f)
