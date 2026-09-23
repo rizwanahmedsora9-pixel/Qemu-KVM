@@ -38,6 +38,13 @@ object QemuLogBus {
     private val _webPortReady = MutableStateFlow(false)
     val webPortReady = _webPortReady.asStateFlow()
 
+    /**
+     * The URL the WebView should load. Kept in the bus rather than recomputed
+     * in the UI because the forwarded port is now per-boot configuration.
+     */
+    private val _webUrl = MutableStateFlow<String?>(null)
+    val webUrl = _webUrl.asStateFlow()
+
     fun log(line: String) {
         _logLines.tryEmit(line)
     }
@@ -53,8 +60,13 @@ object QemuLogBus {
         _webPortReady.value = ready
     }
 
+    fun setWebUrl(url: String) {
+        _webUrl.value = url
+    }
+
     fun reset() {
         _status.value = QemuStatus.IDLE
         _webPortReady.value = false
+        _webUrl.value = null
     }
 }
