@@ -1,0 +1,32 @@
+Place the stock-firmware support payloads in this directory (app/src/main/assets/)
+named exactly as below. All of them are optional: AssetInstaller falls back to a
+user-picked file, then to a download, so the app still builds and runs with none
+of these present.
+
+    qemu-system-mips          MIPS big-endian emulator   (must cross-compile, see PUT_QEMU_BINARY_HERE.txt)
+    qemu-system-mipsel        MIPS little-endian emulator (only needed for MediaTek MT76xx devices)
+    busybox.mipseb            static MIPS BE busybox      -> used to build the initramfs
+    busybox.mipsel            static MIPS LE busybox
+    libnvram.so.mipseb        nvram shim, MIPS BE         -> LD_PRELOADed into the firmware
+    libnvram.so.mipsel        nvram shim, MIPS LE
+    libnvram_ioctl.so.mipseb  optional ioctl variant
+    libnvram_ioctl.so.mipsel  optional ioctl variant
+
+Where to get them
+-----------------
+busybox.* and libnvram* are published by FirmAE and AssetInstaller can fetch them
+directly from:
+
+    https://github.com/pr0v3rbs/FirmAE/releases/download/v1.0/busybox.mipseb
+    https://github.com/pr0v3rbs/FirmAE/releases/download/v1.0/libnvram.so.mipseb
+    ...and the matching .mipsel names
+
+Those URLs were checked on 2026-09-23 (HTTP 302 to a signed release asset; a
+deliberately bogus filename on the same release returns 404).
+
+There is no redistributable Android build of qemu-system-mips. Cross-compile
+QEMU's mips-softmmu target with the Android NDK, statically linked, for the
+ABI(s) you ship.
+
+Everything matched here is gitignored by RouterEmu/.gitignore, so bundling them
+is a local build decision, not a commit.

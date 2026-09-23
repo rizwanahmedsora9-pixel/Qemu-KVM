@@ -28,11 +28,57 @@ firmadyne / FirmAE, packaged as a self-contained mobile app.
    `RouterEmu/app/src/main/assets/`, plus a MIPS kernel (`vmlinux.elf`) and raw
    root filesystem (`tplink_root.img`) picked via SAF or downloaded.
 2. **Boot** — `QemuService` launches QEMU with `-M malta`, user-mode networking,
-   and `hostfwd=tcp::8080-:80` so the guest's port 80 is reachable on the host.
-3. **Wait** — `PortUtils` polls `127.0.0.1:8080` (up to 3 minutes) until the
+   and `hostfwd=tcp::<hostPort>-:<guestPort>` so the guest's web server is
+   reachable on the host.
+3. **Wait** — `PortUtils` polls `127.0.0.1:<hostPort>` (up to 3 minutes) until the
    firmware's web server is actually accepting connections.
-4. **Browse** — the WebView tab loads `http://localhost:8080` (cleartext allowed
+4. **Browse** — the WebView tab loads `http://localhost:<hostPort>` (cleartext allowed
    for loopback only via `network_security_config.xml`).
+
+## Stock vendor firmware
+
+Bootable, but only with help — see below for why, and
+[`WR720N-ASSETS.md`](WR720N-ASSETS.md) for the full asset checklist.
+
+| Component | What it does |
+|---|---|
+| `DeviceProfiles.kt` | Per-model defaults (SoC, endianness, QEMU CPU, RAM, init path) for 20+ TP-Link devices |
+| `EmuConfig.kt` | Everything that used to be a hardcoded literal: machine, CPU, RAM, `init=`, cmdline, ports, net strategy |
+| `InitramfsBuilder.kt` | Generates the initramfs that injects libnvram and brings up networking |
+| `CpioBuilder.kt` | Writes SVR4 `newc` cpio archives in pure Kotlin — the kernel's initramfs format |
+| `ArchDetector.kt` | Sniffs endianness/ISA and candidate `init=` paths out of a picked image |
+
+**Why stock firmware needs the initramfs.** Vendor daemons call `nvram_get()`
+during startup and hang when it is unresolved, and nothing brings up the
+emulated NIC. Firmadyne/FirmAE solve both by mutating the firmware image on a
+rooted host; an Android app cannot `mount` an ext image at all. So instead the
+app builds an initramfs at runtime, which the kernel mounts as rootfs first.
+`/init` mounts the real root at `/new_root`, copies `libnvram.so` into it,
+configures the SLIRP address (10.0.2.15 / gw 10.0.2.2), and `switch_root`s into
+the firmware with `LD_PRELOAD` exported. No root, no image mutation.
+
+**The kernel still has to be substituted.** QEMU has no machine model for any
+real router SoC (AR9331, AR7240, QCA9558, MT7620 …), so the vendor kernel will
+never boot on `-M malta`. Supply a Malta kernel for the matching endianness —
+FirmAE's `vmlinux.mipseb.4` / `vmlinux.mipsel.4` are what the "Get default"
+buttons fetch.
+
+### Verification
+
+`tools/` holds two harnesses. They exist because there is no reachable JDK,
+Android SDK or Gradle in the sandbox these were written in, so the Kotlin could
+not be compiled:
+
+```bash
+python3 tools/verify_initramfs.py    # cpio round-trip via `busybox cpio -H newc`; `sh -n` on the emitted /init
+python3 tools/verify_kotlin_refs.py  # every cross-file symbol resolves; braces balance; imports present
+```
+
+The first reads the real templates out of `InitramfsBuilder.kt` and feeds the
+result to `busybox cpio` and `busybox sh -n`. The second is a cross-reference
+checker, **not** a type checker — it will not catch overload or Compose compiler
+errors. Run `gradle -p RouterEmu assembleDebug` somewhere with an SDK before
+shipping.
 
 ## Design notes
 

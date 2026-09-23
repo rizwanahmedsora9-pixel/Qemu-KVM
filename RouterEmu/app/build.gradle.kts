@@ -55,6 +55,21 @@ android {
     // we don't want for a standalone emulator binary — assets keeps it inert).
     sourceSets["main"].assets.srcDirs("src/main/assets")
 
+    // Keep the native payloads uncompressed inside the APK. AGP compresses any
+    // asset whose extension is not on its default no-compress list, and these
+    // have extensions like `.mipseb` (or none at all). AssetInstaller avoids
+    // assets.openFd() for exactly this reason, but shipping them stored also
+    // keeps the copy path off the inflate hot path.
+    androidResources {
+        noCompress += listOf(
+            "qemu-system-mips",
+            "qemu-system-mipsel",
+            "mipseb",
+            "mipsel",
+            "so"
+        )
+    }
+
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
