@@ -154,13 +154,16 @@ jobs:
           else
             echo "build_ok=false" >> "$GITHUB_OUTPUT"
             {
-              echo "## Gradle build failed — log tail"
+              echo "## Gradle build failed — compiler errors"
               echo '```'
-              tail -n 120 gradle-build.log
+              { grep -E "^e: |error:|FAILURE: |What went wrong|^\* " gradle-build.log \
+                  | grep -vE "^\s*at " | head -80; } || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             # Surface the error lines as annotations (readable via API).
-            tail -n 40 gradle-build.log | sed 's/%25/%/g' | while IFS= read -r line; do
+            errs="$(grep -E '^e: ' gradle-build.log | head -40 || true)"
+            if [ -z "$errs" ]; then errs="$(tail -n 40 gradle-build.log)"; fi
+            printf '%s\n' "$errs" | sed 's/%25/%/g' | while IFS= read -r line; do
               echo "::error title=Gradle::${line}"
             done
             exit 1
@@ -180,11 +183,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # --stacktrace buries the compiler diagnostics under hundreds of lines
+          # of Gradle internals, and the raw log/artifact endpoints are not
+          # always reachable, so surface the actual `e:`/error lines first and
+          # keep only a short raw tail as a fallback.
           {
-            echo "### ❌ Build APK failed — Gradle log tail"
+            echo "### ❌ Build APK failed — compiler / Gradle errors"
+            echo
             echo '```'
-            tail -n 150 gradle-build.log 2>/dev/null || echo "(no gradle-build.log)"
+            { grep -E "^e: |^w: .*(error|never used)|error:|FAILURE: |What went wrong|^\* |Caused by: (org\.jetbrains\.kotlin|com\.android)" gradle-build.log \
+                | grep -vE "^\s*at " | head -100; } || true
             echo '```'
+            echo
+            echo "<details><summary>raw log tail (60 lines)</summary>"
+            echo
+            echo '```'
+            tail -n 60 gradle-build.log 2>/dev/null || echo "(no gradle-build.log)"
+            echo '```'
+            echo
+            echo "</details>"
           } > /tmp/fail-comment.md
           gh pr comment "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" \
